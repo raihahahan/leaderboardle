@@ -4,6 +4,7 @@ import numpy as np
 from leaderboardle.vision import (
     _classify_game,
     _extract_krillion_score,
+    _extract_minecraftle,
     _parse_attempts,
 )
 
@@ -22,6 +23,7 @@ def test_score_formats():
     assert _parse_attempts("Wordle 1,234 3/6") == (3, 6, True)
     assert _parse_attempts("Wordle 1,234 X/6") == (7, 6, False)
     assert _parse_attempts("Solved in 4 attempts") == (4, None, True)
+    assert _extract_minecraftle("You won! Took 6 quesses.") == 6
 
 
 def test_krillion_score_in_uncropped_landscape_result():

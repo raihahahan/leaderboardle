@@ -118,7 +118,11 @@ def _extract_poople(text: str) -> tuple[int, int | None, bool] | None:
 
 
 def _extract_minecraftle(text: str) -> int | None:
-    score = re.search(r"took\s+(\d+)\s+guesses", text, re.IGNORECASE)
+    # Telegram's JPEG conversion can make the pixel-font word "guesses" OCR
+    # as "quesses". Classification has already established Minecraftle here,
+    # so the stable "Took <number>" portion is sufficient and avoids relying
+    # on the noisier trailing word.
+    score = re.search(r"\btook\s+(\d+)\b", text, re.IGNORECASE)
     return int(score.group(1)) if score else None
 
 
