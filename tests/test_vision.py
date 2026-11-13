@@ -1,6 +1,11 @@
+import cv2
 import numpy as np
 
-from leaderboardle.vision import _classify_game, _parse_attempts
+from leaderboardle.vision import (
+    _classify_game,
+    _extract_krillion_score,
+    _parse_attempts,
+)
 
 
 def test_game_names():
@@ -17,4 +22,20 @@ def test_score_formats():
     assert _parse_attempts("Wordle 1,234 3/6") == (3, 6, True)
     assert _parse_attempts("Wordle 1,234 X/6") == (7, 6, False)
     assert _parse_attempts("Solved in 4 attempts") == (4, None, True)
+
+
+def test_krillion_score_in_uncropped_landscape_result():
+    image = np.full((638, 1114, 3), (28, 42, 52), dtype=np.uint8)
+    cv2.putText(
+        image,
+        "280",
+        (75, 205),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        4,
+        (245, 245, 245),
+        8,
+        cv2.LINE_AA,
+    )
+
+    assert _extract_krillion_score(image) == 280
 

@@ -131,9 +131,13 @@ def _extract_krillion_score(image: np.ndarray) -> int | None:
     page = (0.055, 0.21, 0.08, 0.43)
     browser = (0.15, 0.31, 0.03, 0.50)
     desktop_browser = (0.18, 0.30, 0.30, 0.47)
+    landscape_page = (0.12, 0.36, 0.03, 0.34)
     aspect = width / max(height, 1)
     if aspect > 1.4:
-        regions = (desktop_browser, tight, page, browser)
+        # Uncropped landscape results place the score lower than the narrow
+        # page band. Keep this ahead of the older fallback crops so all three
+        # digits are visible rather than returning a clipped partial score.
+        regions = (desktop_browser, landscape_page, tight, page, browser)
     elif aspect < 0.55:
         regions = (browser, tight, page)
     else:
