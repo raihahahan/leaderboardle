@@ -9,7 +9,7 @@ It currently supports:
 - Poople
 - Krillion
 
-The bot reads each screenshot with local OCR, records the sender's result, tracks participation streaks, and posts a short top-three leaderboard at midnight Singapore time. The schedule uses the `Asia/Singapore` timezone explicitly, regardless of the laptop's configured timezone. No submission form, caption, or special command is needed.
+The bot reads each screenshot with local OCR, records the sender's result, tracks participation streaks, and posts a short top-three leaderboard at midnight. No submission form, caption, or special command is needed.
 
 ## How it works
 
@@ -102,7 +102,7 @@ That is all your friends need to do. They can continue sharing screenshots norma
 
 ## Run in the background
 
-The Makefile keeps the bot running with `nohup` and writes output to `logs/nohup.log`. The application also creates one dated log file per Singapore day.
+The Makefile keeps the bot running with `nohup` and writes output to `logs/nohup.log`. The application also creates one dated log file per day.
 
 ```sh
 make start
@@ -131,4 +131,3 @@ To inspect or correct scores locally, run:
 ## Contributing
 
 Contributions for new games, recognition improvements, and regression tests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout, test command, and copyable prompts for coding agents.
-
