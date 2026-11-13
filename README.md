@@ -1,80 +1,134 @@
 # Leaderboardle
 
-A deliberately small, local-only Telegram bot that watches group screenshots, extracts daily-game results with local OCR, and posts a brief leaderboard at midnight Singapore time.
+Leaderboardle is a local Telegram bot for group chats where friends share screenshots of daily games. Add it to the chat, keep posting screenshots as usual, and let the bot handle the rest.
 
-## What it does
+It currently supports:
 
-- Watches photo messages and image documents without replying or reacting.
-- Recognizes Wordle, Minecraftle, Poople, and Krillion from page phrases, layout/aspect ratio, and color signatures; the title is only a fallback.
-- Uses targeted per-game extraction: Poople's “used” guesses, Minecraftle's score, and Krillion's large pixel score. Every game uses the Telegram message's Singapore date.
-- For a Wordle statistics-only screenshot, stores the player's six-row distribution and infers today's result from its next delta. A first screenshot can only be scored when it is mathematically unambiguous (for example, a current-streak-zero loss); otherwise it silently becomes the baseline.
-- Saves results, Telegram update checkpoints, and summary checkpoints in `data/leaderboard.sqlite3`.
-- On restart, consumes Telegram's pending update queue before sending any missed daily summaries.
-- Posts the day that just ended at `00:00 Asia/Singapore`.
-- Shows a per-member, per-game consecutive participation streak (`🔥N`). Only members who submitted that game on the requested day appear.
-- Formats each game as its own ranked section with one member per line, including tied ranks, capped at the top three displayed members. The overall-leaders list is also capped at three names.
-- `/leaderboard` shows today. `/leaderboard YYYY-MM-DD` shows another day.
-- The unlisted `/admin` command gives whitelisted admins reset buttons for the last seven days or all days. `/admin YYYY-MM-DD` targets any other day. It is omitted from Telegram's command menu, and non-admin attempts are silently ignored.
+- Wordle
+- Minecraftle
+- Poople
+- Krillion
 
-The bot stays silent when an image is not recognized.
+The bot reads each screenshot with local OCR, records the sender's result, tracks participation streaks, and posts a short top-three leaderboard at midnight Singapore time. The schedule uses the `Asia/Singapore` timezone explicitly, regardless of the laptop's configured timezone. No submission form, caption, or special command is needed.
 
-## Telegram limitation
+## How it works
 
-Bot accounts cannot request arbitrary group message history. Telegram retains unreceived Bot API updates for at most 24 hours. The local checkpoint prevents duplicates and catches up after normal laptop downtime, but an outage longer than 24 hours can leave an unrecoverable gap. Full history would require logging in as a Telegram user via MTProto, which is intentionally outside this token-only design.
+- Screenshots are matched using text, layout, color, and game-specific visual patterns.
+- Results are stored separately for each Telegram group in a local SQLite database.
+- Missed Telegram updates are picked up after normal laptop downtime, subject to Telegram's 24-hour update limit.
+- Rejected screenshots from the current day are kept locally and rescanned when the bot starts again.
+- `/leaderboard` shows today's standings. `/leaderboard YYYY-MM-DD` shows another day.
+- `/admin` is hidden from the command menu and only works for usernames listed in `admins.txt`.
 
-## Setup (macOS)
+Recognition is rule-based and will not be perfectly accurate. Browser chrome, ads, cropping, compression, and game redesigns can all affect OCR. If a screenshot is not recognized, see [CONTRIBUTING.md](CONTRIBUTING.md) for a ready-to-use agent prompt.
 
-1. Install Python 3.11+ and Tesseract OCR:
+## Example leaderboard
 
-   ```sh
-   brew install python tesseract
-   ```
+Usernames below are fictional. Each game displays at most three members.
 
-2. Create the environment and install dependencies:
+```text
+🏆 12 Nov leaderboard
 
-   ```sh
-   cd leaderboardle
-   python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
-   ```
+🟩 Wordle
+🥇 @alice_daily - 3 · 🔥4
+🥈 @bob_blocks - 4 · 🔥2
 
-3. In BotFather, run `/setprivacy`, choose this bot, and select **Disable**. Without this, Telegram hides ordinary group screenshots from the bot.
+⛏️ Minecraftle
+🥇 @bob_blocks - 5 · 🔥3
 
-4. Add the bot to the group. It does not need to be an admin.
+💩 Poople
+🥇 @carol_guesses - 7 · 🔥1
 
-5. Start it:
+🌊 Krillion
+🥇 @alice_daily - 420 · 🔥2
 
-   ```sh
-   .venv/bin/python main.py
-   ```
-
-### Run in the background
-
-Logs are written both to stdout and to a new Singapore-date file each day at
-`logs/leaderboardle-YYYY-MM-DD.log`.
-
-```sh
-mkdir -p logs
-nohup .venv/bin/python main.py > logs/nohup.out 2>&1 &
-tail -f logs/nohup.out
+👑 Overall leaders (2 wins)
+@alice_daily
 ```
 
-To follow the current daily file instead:
+## Setup
+
+### 1. Create a Telegram bot
+
+Open [BotFather](https://t.me/BotFather), run `/newbot`, and copy the token it gives you.
+
+### 2. Install the project
+
+Python 3.11 or newer and Tesseract OCR are required. On macOS:
 
 ```sh
-tail -f "logs/leaderboardle-$(TZ=Asia/Singapore date +%F).log"
+brew install python tesseract
+git clone <your-repository-url>
+cd leaderboardle
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
-The token is read only from `.env`. Admin usernames are lowercase, without `@`, one per line in `admins.txt`.
-
-## Test
+### 3. Configure the token
 
 ```sh
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pytest
+cp .env.example .env
 ```
 
-## Notes on recognition
+Edit `.env`:
 
-OCR is deterministic and local; no image or chat data is sent anywhere except Telegram's normal bot file download. Krillion is ranked as a higher-is-better score; the other games rank fewer guesses first.
+```dotenv
+TELEGRAM_BOT_TOKEN=paste-token-from-botfather
+```
+
+Create the local admin allowlist:
+
+```sh
+touch admins.txt
+```
+
+For admin access, add lowercase Telegram usernames to `admins.txt`, one per line and without `@`. This file is intentionally included in `.gitignore` because it can contain private Telegram usernames. Leave it empty if you do not need the hidden `/admin` command.
+
+### 4. Disable BotFather privacy mode
+
+In BotFather, run `/setprivacy`, select your bot, then choose **Disable**.
+
+Telegram privacy mode normally hides ordinary group messages from bots. Disabling it is required because Leaderboardle needs to receive screenshots that are posted without a command. The bot does not need to be a group admin.
+
+### 5. Add the bot and start it
+
+Add the bot to your group chat, then run:
+
+```sh
+.venv/bin/python main.py
+```
+
+That is all your friends need to do. They can continue sharing screenshots normally.
+
+## Run in the background
+
+The Makefile keeps the bot running with `nohup` and writes output to `logs/nohup.log`. The application also creates one dated log file per Singapore day.
+
+```sh
+make start
+make status
+make logs
+make restart
+make stop
+```
+
+Use `make deploy` to pull the current branch, install dependencies, and restart. If the bot was started manually before using the Makefile, run `make adopt` once.
+
+## Local data and privacy
+
+- OCR runs locally. No LLM or cloud image-analysis service is used.
+- Scores, checkpoints, and pending screenshot data are stored in `data/leaderboard.sqlite3`.
+- Logs are stored under `logs/`.
+- Telegram still receives and delivers the original group messages as part of its normal service.
+- A bot cannot request arbitrary chat history. Telegram only retains unreceived Bot API updates for up to 24 hours, so longer offline periods can leave gaps.
+
+To inspect or correct scores locally, run:
+
+```sh
+.venv/bin/python score_editor.py
+```
+
+## Contributing
+
+Contributions for new games, recognition improvements, and regression tests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout, test command, and copyable prompts for coding agents.
 

@@ -71,14 +71,19 @@ def _classify_game(text: str, image: np.ndarray) -> str | None:
     normalized = _normalize(text)
     height, width = image.shape[:2]
     aspect = width / max(height, 1)
+    krillion_palette = _has_krillion_palette(image)
     if ("best solution" in normalized and "guesses" in normalized) or (
         "avg extra guesses" in normalized and "play again" in normalized
     ):
         return "Poople"
     if "took" in normalized and "guesses" in normalized and aspect > 2.2:
         return "Minecraftle"
-    if ("today s players" in normalized and "dive" in normalized) or (
-        aspect > 1.05 and _has_krillion_palette(image)
+    if (
+        "today s players" in normalized
+        and ("dive" in normalized or krillion_palette)
+    ) or (
+        krillion_palette
+        and ("bearing" in normalized or "krillion" in normalized)
     ):
         return "Krillion"
     if "guess distribution" in normalized and (
@@ -119,21 +124,42 @@ def _extract_minecraftle(text: str) -> int | None:
 
 def _extract_krillion_score(image: np.ndarray) -> int | None:
     height, width = image.shape[:2]
-    # Keep the crop tight around the large score. A taller mobile screenshot
-    # otherwise includes the chart and causes single-line OCR to miss the digits.
-    crop = image[
-        int(height * 0.055):int(height * 0.21),
-        int(width * 0.08):int(width * 0.43),
-    ]
-    for use_threshold in (False, True):
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        if use_threshold:
-            gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-        value = _ocr(gray, psm=13, digits_only=True, scale=4)
-        match = re.search(r"\d{2,5}", value)
-        if match:
-            return int(match.group())
-    return None
+    # A tight band prevents the nearby depth label (for example -3,900m) from
+    # confusing OCR. Narrow mobile browser captures shift the game down below
+    # browser chrome, so those use the lower band first.
+    tight = (0.06, 0.22, 0.03, 0.34)
+    page = (0.055, 0.21, 0.08, 0.43)
+    browser = (0.15, 0.31, 0.03, 0.50)
+    desktop_browser = (0.18, 0.30, 0.30, 0.47)
+    aspect = width / max(height, 1)
+    if aspect > 1.4:
+        regions = (desktop_browser, tight, page, browser)
+    elif aspect < 0.55:
+        regions = (browser, tight, page)
+    else:
+        regions = (tight, page, browser)
+    candidates: list[int] = []
+    for y1, y2, x1, x2 in regions:
+        crop = image[
+            int(height * y1):int(height * y2),
+            int(width * x1):int(width * x2),
+        ]
+        for use_threshold in (False, True):
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            if use_threshold:
+                gray = cv2.threshold(
+                    gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+                )[1]
+            value = _ocr(gray, psm=13, digits_only=True, scale=4)
+            match = re.search(r"\d{2,5}", value)
+            if match:
+                candidate = int(match.group())
+                if candidate not in candidates:
+                    candidates.append(candidate)
+                break
+    # Krillion's visible scale is normally a three-digit score. This also
+    # avoids accepting a cropped "20" when another region correctly sees 420.
+    return next((value for value in candidates if 100 <= value <= 999), candidates[0] if candidates else None)
 
 
 def _ocr_single_stat(image: np.ndarray, x1: float, x2: float) -> int | None:

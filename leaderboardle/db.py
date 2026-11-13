@@ -74,6 +74,34 @@ class Database:
                 distribution TEXT NOT NULL,
                 PRIMARY KEY(chat_id, user_id, game)
             );
+            CREATE TABLE IF NOT EXISTS image_inbox (
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                update_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                display_name TEXT NOT NULL,
+                sent_at TEXT NOT NULL,
+                played_on TEXT NOT NULL,
+                image BLOB,
+                status TEXT NOT NULL,
+                detected_game TEXT,
+                last_error TEXT,
+                scan_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(chat_id, message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_image_inbox_unresolved
+                ON image_inbox(played_on, status);
+            CREATE TABLE IF NOT EXISTS manual_members (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(chat_id, user_id),
+                UNIQUE(chat_id, username COLLATE NOCASE)
+            );
             """
         )
         self.conn.commit()
@@ -218,6 +246,124 @@ class Database:
             ),
         )
         self.conn.commit()
+
+    def stage_image(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        update_id: int,
+        user_id: int,
+        username: str | None,
+        display_name: str,
+        sent_at: datetime,
+        played_on: date,
+        image: bytes,
+    ) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        self.conn.execute(
+            """
+            INSERT INTO image_inbox(
+                chat_id, message_id, update_id, user_id, username, display_name,
+                sent_at, played_on, image, status, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,'pending',?)
+            ON CONFLICT(chat_id, message_id) DO NOTHING
+            """,
+            (
+                chat_id, message_id, update_id, user_id, username, display_name,
+                sent_at.isoformat(), played_on.isoformat(), image, now,
+            ),
+        )
+        self.conn.commit()
+
+    def mark_image_result(
+        self,
+        chat_id: int,
+        message_id: int,
+        status: str,
+        *,
+        detected_game: str | None = None,
+        last_error: str | None = None,
+        clear_image: bool = False,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE image_inbox
+            SET status=?, detected_game=?, last_error=?,
+                scan_count=scan_count+1,
+                image=CASE WHEN ? THEN NULL ELSE image END,
+                updated_at=?
+            WHERE chat_id=? AND message_id=?
+            """,
+            (
+                status, detected_game, last_error, int(clear_image),
+                datetime.now().isoformat(timespec="seconds"), chat_id, message_id,
+            ),
+        )
+        self.conn.commit()
+
+    def unresolved_images(self, played_on: date) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                """
+                SELECT * FROM image_inbox
+                WHERE played_on=?
+                  AND status IN ('pending', 'rejected', 'error')
+                  AND image IS NOT NULL
+                ORDER BY update_id
+                """,
+                (played_on.isoformat(),),
+            )
+        )
+
+    def merge_manual_member(
+        self,
+        chat_id: int,
+        user_id: int,
+        username: str | None,
+        display_name: str,
+    ) -> bool:
+        if not username:
+            return False
+        manual = self.conn.execute(
+            """
+            SELECT * FROM manual_members
+            WHERE chat_id=? AND username=? COLLATE NOCASE
+            """,
+            (chat_id, username.lstrip("@")),
+        ).fetchone()
+        if not manual or manual["user_id"] == user_id:
+            return False
+        temporary_id = manual["user_id"]
+        rows = self.conn.execute(
+            "SELECT * FROM submissions WHERE chat_id=? AND user_id=?",
+            (chat_id, temporary_id),
+        ).fetchall()
+        for row in rows:
+            conflict = self.conn.execute(
+                """
+                SELECT id FROM submissions
+                WHERE chat_id=? AND user_id=? AND game=? AND played_on=?
+                """,
+                (chat_id, user_id, row["game"], row["played_on"]),
+            ).fetchone()
+            if conflict:
+                self.conn.execute("DELETE FROM submissions WHERE id=?", (row["id"],))
+            else:
+                self.conn.execute(
+                    """
+                    UPDATE submissions
+                    SET user_id=?, username=?, display_name=?
+                    WHERE id=?
+                    """,
+                    (user_id, username, display_name, row["id"]),
+                )
+        self.conn.execute(
+            "DELETE FROM manual_members WHERE chat_id=? AND user_id=?",
+            (chat_id, temporary_id),
+        )
+        self.conn.commit()
+        return True
 
     def pending_summary_days(self, chat_id: int, yesterday: date) -> list[date]:
         key = f"last_summary:{chat_id}"

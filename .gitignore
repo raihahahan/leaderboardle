@@ -1,4 +1,5 @@
 .env
+admins.txt
 .venv/
 __pycache__/
 *.py[cod]
@@ -8,4 +9,3 @@ htmlcov/
 data/
 logs/
 .DS_Store
-admins.txt

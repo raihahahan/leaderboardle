@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from leaderboardle.db import Database, Submission
 
@@ -56,4 +56,53 @@ def test_streak_breaks_on_missed_day(tmp_path):
             raw_text="Poople",
         ))
     assert db.participation_streak(-1, 8, "Poople", last_day) == 1
+
+
+def test_rejected_image_is_retained_for_startup_rescan(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    day = date(2026, 11, 12)
+    db.stage_image(
+        chat_id=-1,
+        message_id=50,
+        update_id=500,
+        user_id=9,
+        username="player",
+        display_name="Player",
+        sent_at=datetime(2026, 11, 12, 10, 30),
+        played_on=day,
+        image=b"image bytes",
+    )
+    db.mark_image_result(-1, 50, "rejected")
+
+    rows = db.unresolved_images(day)
+    assert len(rows) == 1
+    assert bytes(rows[0]["image"]) == b"image bytes"
+    assert rows[0]["scan_count"] == 1
+
+    db.mark_image_result(
+        -1, 50, "accepted", detected_game="Krillion", clear_image=True
+    )
+    assert db.unresolved_images(day) == []
+
+
+def test_real_telegram_user_merges_manual_member_history(tmp_path):
+    db = Database(tmp_path / "test.sqlite3")
+    db.conn.execute(
+        """
+        INSERT INTO manual_members(chat_id, user_id, username, display_name, created_at)
+        VALUES(-1, -1, 'newplayer', 'New Player', '2026-11-12T10:00:00')
+        """
+    )
+    db.conn.commit()
+    db.save_submission(Submission(
+        chat_id=-1, message_id=-1, update_id=-1, user_id=-1,
+        username="newplayer", display_name="New Player", game="Krillion",
+        played_on=date(2026, 11, 12), attempts=360, max_attempts=None,
+        success=True, raw_text="manual edit",
+    ))
+
+    assert db.merge_manual_member(-1, 12345, "NewPlayer", "Real Name") is True
+    row = db.leaderboard(-1, date(2026, 11, 12))[0]
+    assert row["user_id"] == 12345
+    assert row["display_name"] == "Real Name"
 

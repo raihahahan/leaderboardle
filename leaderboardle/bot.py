@@ -71,23 +71,69 @@ class LeaderboardBot:
             return
         telegram_file = await media.get_file()
         image_bytes = bytes(await telegram_file.download_as_bytearray())
+        sent_at = update.message.date.astimezone(SGT)
+        user = update.effective_user
+        self.db.stage_image(
+            chat_id=update.effective_chat.id,
+            message_id=update.message.message_id,
+            update_id=update.update_id,
+            user_id=user.id,
+            username=user.username,
+            display_name=user.full_name,
+            sent_at=sent_at,
+            played_on=sent_at.date(),
+            image=image_bytes,
+        )
+        await self._process_saved_image(
+            chat_id=update.effective_chat.id,
+            message_id=update.message.message_id,
+            update_id=update.update_id,
+            user_id=user.id,
+            username=user.username,
+            display_name=user.full_name,
+            played_on=sent_at.date(),
+            image_bytes=image_bytes,
+            is_rescan=False,
+        )
+
+    async def _process_saved_image(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        update_id: int,
+        user_id: int,
+        username: str | None,
+        display_name: str,
+        played_on: date,
+        image_bytes: bytes,
+        is_rescan: bool,
+    ) -> None:
         try:
             result = await asyncio.to_thread(detect_result, image_bytes)
-        except Exception:
-            LOG.exception("Could not analyze image from message %s", update.message.message_id)
+        except Exception as error:
+            self.db.mark_image_result(
+                chat_id, message_id, "error", last_error=repr(error)
+            )
+            LOG.exception("Could not analyze image from message %s", message_id)
             return
         if not result:
+            self.db.mark_image_result(chat_id, message_id, "rejected")
+            LOG.info(
+                "Retained unrecognized image from %s (chat=%s message=%s)",
+                display_name, chat_id, message_id,
+            )
             return
+        if self.db.merge_manual_member(chat_id, user_id, username, display_name):
+            LOG.info("Merged manual member @%s into Telegram user %s", username, user_id)
         attempts = result.attempts
         success = result.success
         if result.game == "Wordle" and result.distribution is not None:
-            previous = self.db.game_snapshot(
-                update.effective_chat.id, update.effective_user.id, result.game
-            )
+            previous = self.db.game_snapshot(chat_id, user_id, result.game)
             attempts, success = self._resolve_wordle_stats(result, previous)
             self.db.save_game_snapshot(
-                update.effective_chat.id,
-                update.effective_user.id,
+                chat_id,
+                user_id,
                 result.game,
                 result.played_total,
                 result.current_streak,
@@ -96,28 +142,54 @@ class LeaderboardBot:
             if attempts is None or success is None:
                 LOG.info(
                     "Saved initial Wordle stats for %s; need the next distribution delta to infer a score",
-                    update.effective_user.full_name,
+                    display_name,
+                )
+                self.db.mark_image_result(
+                    chat_id, message_id, "accepted",
+                    detected_game=result.game, clear_image=True,
                 )
                 return
-        sent_at = update.message.date.astimezone(SGT)
-        user = update.effective_user
         item = Submission(
-            chat_id=update.effective_chat.id,
-            message_id=update.message.message_id,
-            update_id=update.update_id,
-            user_id=user.id,
-            username=user.username,
-            display_name=user.full_name,
+            chat_id=chat_id,
+            message_id=message_id,
+            update_id=update_id,
+            user_id=user_id,
+            username=username,
+            display_name=display_name,
             game=result.game,
-            played_on=result.played_on or sent_at.date(),
+            played_on=result.played_on or played_on,
             attempts=attempts,
             max_attempts=result.max_attempts,
             success=success,
             raw_text=result.raw_text,
         )
         saved = self.db.save_submission(item)
+        self.db.mark_image_result(
+            chat_id, message_id, "accepted",
+            detected_game=result.game, clear_image=True,
+        )
         if saved:
-            LOG.info("Recorded %s for %s: %s", result.game, user.full_name, attempts)
+            action = "Reconciled" if is_rescan else "Recorded"
+            LOG.info("%s %s for %s: %s", action, result.game, display_name, attempts)
+
+    async def _rescan_rejected_today(self) -> None:
+        today = datetime.now(SGT).date()
+        rows = self.db.unresolved_images(today)
+        if not rows:
+            return
+        LOG.info("Rescanning %s unresolved image(s) for %s", len(rows), today)
+        for row in rows:
+            await self._process_saved_image(
+                chat_id=row["chat_id"],
+                message_id=row["message_id"],
+                update_id=row["update_id"],
+                user_id=row["user_id"],
+                username=row["username"],
+                display_name=row["display_name"],
+                played_on=date.fromisoformat(row["played_on"]),
+                image_bytes=bytes(row["image"]),
+                is_rescan=True,
+            )
 
     @staticmethod
     def _resolve_wordle_stats(result, previous) -> tuple[int | None, bool | None]:
@@ -330,6 +402,7 @@ class LeaderboardBot:
             ])
             last = int(self.db.checkpoint("last_update_id", "-1") or -1)
             offset = await self._drain_pending(last + 1 if last >= 0 else 0)
+            await self._rescan_rejected_today()
             await self._catch_up_summaries()
             midnight_task = asyncio.create_task(self._midnight_loop())
             try:
